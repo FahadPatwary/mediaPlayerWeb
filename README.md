@@ -1,36 +1,106 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Media Player Web
+
+A synchronized video watching web application built with Next.js and Socket.IO.
+
+## Features
+
+- 🎬 **Synchronized Video Playback** - Watch videos together in real-time
+- 🏠 **Room Management** - Create and join rooms with unique codes
+- 🔄 **Media Synchronization** - Automatic sync of play, pause, and seek events
+- 🔊 **Volume Boost** - Adjustable volume enhancement
+- 🌙 **Dark Mode** - Toggle between light and dark themes
+- 📋 **Copy Room Code** - Click to copy room codes to clipboard
+- 📱 **Responsive Design** - Works on desktop and mobile devices
+
+## Tech Stack
+
+- **Frontend**: Next.js 14, React, TypeScript, Tailwind CSS
+- **Backend**: Socket.IO for real-time communication
+- **Deployment**: Netlify-ready
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
 
+- Node.js 18+ 
+- npm or yarn
+
+### Installation
+
+1. Clone the repository:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone <repository-url>
+cd media-player-web
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. Install dependencies:
+```bash
+npm install
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+3. Start the development server:
+```bash
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+4. Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-## Learn More
+## Usage
 
-To learn more about Next.js, take a look at the following resources:
+1. **Create a Room**: Click "Create" to generate a new room code
+2. **Join a Room**: Enter a room code and click "Join"
+3. **Load Media**: Click "Load File" to select a video file
+4. **Sync Playback**: Use "Sync Media" to synchronize with other viewers
+5. **Adjust Volume**: Use the volume boost slider for enhanced audio
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Deployment
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Netlify Deployment
 
-## Deploy on Vercel
+This project is configured for easy deployment on Netlify:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. Push your code to GitHub
+2. Connect your GitHub repository to Netlify
+3. Set build command: `npm run build`
+4. Set publish directory: `out`
+5. Deploy!
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Environment Variables
+
+No environment variables are required for basic functionality.
+
+## Project Structure
+
+```
+media-player-web/
+├── src/
+│   ├── app/
+│   │   ├── globals.css
+│   │   ├── layout.tsx
+│   │   └── page.tsx
+│   └── ...
+├── public/
+├── package.json
+├── next.config.js
+└── README.md
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
+
+## License
+
+MIT License - see LICENSE file for details.
+
+## Author
+
+**Fahad Ahmed Patwary**
+- GitHub: [@FahadPatwary](https://github.com/FahadPatwary)
+
+---
+
+Built with ❤️ for seamless media sharing
