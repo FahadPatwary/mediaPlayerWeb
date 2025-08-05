@@ -38,11 +38,17 @@ export default function MediaPlayer() {
   const [isSyncAnimating, setIsSyncAnimating] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [syncButtonPosition, setSyncButtonPosition] = useState({ x: 20, y: 100 });
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
+  const [lastSyncTime, setLastSyncTime] = useState(0);
+  const [isReceivingSync, setIsReceivingSync] = useState(false);
 
   // Refs
   const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaSyncSocketRef = useRef<Socket | null>(null);
+  const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastAutoSyncRef = useRef<number>(0);
+  const isReceivingSyncRef = useRef<boolean>(false);
 
   // Server URL - Use deployed server for production
   const serverUrl = process.env.NODE_ENV === 'production' 
@@ -130,7 +136,17 @@ export default function MediaPlayer() {
       showNotification(error.message || 'Room operation failed', 'error');
     });
 
-    mediaSyncSocket.on('syncMedia', (data: { mediaState: MediaState }) => {
+    mediaSyncSocket.on('userJoined', (data) => {
+      console.log('User joined room:', data);
+      showNotification(`User joined the room (${data.userCount} users total)`, 'success');
+    });
+
+    mediaSyncSocket.on('userLeft', (data) => {
+      console.log('User left room:', data);
+      showNotification(`User left the room (${data.userCount} users remaining)`, 'success');
+    });
+
+    mediaSyncSocket.on('syncMedia', (data: { mediaState: MediaState, senderId?: string, syncType?: string }) => {
       console.log('Received sync data:', data);
       if (videoRef.current && data.mediaState && currentRoom) {
         try {
@@ -140,31 +156,57 @@ export default function MediaPlayer() {
             return;
           }
           
+          // Prevent sync loops by ignoring our own sync events
+          if (data.senderId === mediaSyncSocket.id) {
+            console.log('Ignoring own sync event');
+            return;
+          }
+          
+          // Set receiving sync flag to prevent auto-sync during this operation
+          setIsReceivingSync(true);
+          isReceivingSyncRef.current = true;
+          
           const video = videoRef.current;
-          const timeDiff = Math.abs(video.currentTime - data.mediaState.currentTime);
+          const { currentTime, isPlaying } = data.mediaState;
+          const syncType = data.syncType || 'UNKNOWN';
           
-          // Only sync if time difference is significant (more than 1 second)
-          if (timeDiff > 1) {
-            video.currentTime = data.mediaState.currentTime;
-            console.log('Synced video time to:', data.mediaState.currentTime);
+          // More aggressive sync for manual syncs, less for auto syncs
+          const threshold = syncType === 'MANUAL' ? 0.3 : syncType === 'ROOM_STATE' ? 1.0 : 0.5;
+          const timeDiff = Math.abs(video.currentTime - currentTime);
+          
+          if (timeDiff > threshold) {
+            video.currentTime = currentTime;
+            console.log(`🔄 [${syncType}] Synced time: ${currentTime.toFixed(2)}s (diff: ${timeDiff.toFixed(2)}s)`);
           }
           
-          // Handle play/pause state
-          if (data.mediaState.isPlaying && video.paused) {
-            video.play().catch((error) => {
+          // Handle play/pause state with better error handling
+          if (isPlaying && video.paused) {
+            video.play().then(() => {
+              console.log(`▶️ [${syncType}] Synced to play`);
+            }).catch((error) => {
               console.error('Failed to play video:', error);
-              showNotification('Failed to play video', 'error');
+              showNotification('Failed to play video - user interaction may be required', 'error');
             });
-            console.log('Started playing video');
-          } else if (!data.mediaState.isPlaying && !video.paused) {
+          } else if (!isPlaying && !video.paused) {
             video.pause();
-            console.log('Paused video');
+            console.log(`⏸️ [${syncType}] Synced to pause`);
           }
+          
+          // Update last sync time for UI feedback
+          setLastSyncTime(Date.now());
+          
+          // Clear receiving sync flag after a short delay
+          setTimeout(() => {
+            setIsReceivingSync(false);
+            isReceivingSyncRef.current = false;
+          }, 100);
           
           showNotification('Media synced', 'success');
         } catch (error) {
           console.error('Error handling sync data:', error);
           showNotification('Sync error occurred', 'error');
+          setIsReceivingSync(false);
+          isReceivingSyncRef.current = false;
         }
       } else if (!currentRoom) {
         console.warn('Received sync data but not in a room');
@@ -184,6 +226,65 @@ export default function MediaPlayer() {
     };
   }, []);
 
+  // Auto-sync event listeners for video events
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !currentRoom) return;
+
+    const handlePlay = () => {
+      console.log('Video play event detected');
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+      syncTimeoutRef.current = setTimeout(autoSyncMediaState, 100);
+    };
+
+    const handlePause = () => {
+      console.log('Video pause event detected');
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+      syncTimeoutRef.current = setTimeout(autoSyncMediaState, 100);
+    };
+
+    const handleSeeked = () => {
+      console.log('Video seek event detected');
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+      syncTimeoutRef.current = setTimeout(autoSyncMediaState, 200);
+    };
+
+    const handleTimeUpdate = () => {
+      // Periodic sync every 10 seconds during playback
+      if (!video.paused && autoSyncEnabled) {
+        const now = Date.now();
+        if (now - lastAutoSyncRef.current > 10000) {
+          autoSyncMediaState();
+        }
+      }
+    };
+
+    if (autoSyncEnabled) {
+      video.addEventListener('play', handlePlay);
+      video.addEventListener('pause', handlePause);
+      video.addEventListener('seeked', handleSeeked);
+      video.addEventListener('timeupdate', handleTimeUpdate);
+    }
+
+    return () => {
+      if (video) {
+        video.removeEventListener('play', handlePlay);
+        video.removeEventListener('pause', handlePause);
+        video.removeEventListener('seeked', handleSeeked);
+        video.removeEventListener('timeupdate', handleTimeUpdate);
+      }
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+    };
+  }, [currentRoom, autoSyncEnabled]);
+
   // Cleanup effect for component unmount
   useEffect(() => {
     return () => {
@@ -195,6 +296,11 @@ export default function MediaPlayer() {
       // Cleanup audio context
       if (audioContext && audioContext.state !== 'closed') {
         audioContext.close().catch(console.error);
+      }
+      
+      // Cleanup sync timeout
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
       }
       
       // Cleanup notification timeout
@@ -408,6 +514,34 @@ export default function MediaPlayer() {
     }
   };
 
+  const autoSyncMediaState = () => {
+    if (!autoSyncEnabled || !mediaSyncSocketRef.current || !videoRef.current || !currentRoom || isReceivingSyncRef.current) {
+      return;
+    }
+    
+    const now = Date.now();
+    // Debounce auto-sync to prevent spam (minimum 500ms between auto-syncs)
+    if (now - lastAutoSyncRef.current < 500) {
+      return;
+    }
+    
+    lastAutoSyncRef.current = now;
+    
+    const mediaState: MediaState = {
+      currentTime: videoRef.current.currentTime,
+      isPlaying: !videoRef.current.paused
+    };
+    
+    console.log('Auto-syncing media state:', { roomId: currentRoom, mediaState });
+    mediaSyncSocketRef.current.emit('syncMedia', { 
+      roomId: currentRoom, 
+      mediaState,
+      senderId: mediaSyncSocketRef.current.id,
+      isAutoSync: true,
+      isManualSync: false
+    });
+  };
+
   const syncMediaState = () => {
     if (!mediaSyncSocketRef.current || !videoRef.current || !currentRoom) {
       showNotification('Cannot sync: No room joined or video loaded', 'error');
@@ -418,8 +552,14 @@ export default function MediaPlayer() {
       currentTime: videoRef.current.currentTime,
       isPlaying: !videoRef.current.paused
     };
-    console.log('Syncing media state:', { roomId: currentRoom, mediaState });
-    mediaSyncSocketRef.current.emit('syncMedia', { roomId: currentRoom, mediaState });
+    console.log('Manual syncing media state:', { roomId: currentRoom, mediaState });
+    mediaSyncSocketRef.current.emit('syncMedia', { 
+      roomId: currentRoom, 
+      mediaState,
+      senderId: mediaSyncSocketRef.current.id,
+      isManualSync: true,
+      isAutoSync: false
+    });
     showNotification('Media synced successfully!', 'success');
     setTimeout(() => setIsSyncAnimating(false), 1000);
   };
@@ -735,6 +875,52 @@ export default function MediaPlayer() {
                     <p className="text-xs text-orange-600 dark:text-orange-300 flex items-center">
                       <span className="mr-1">⚠️</span>
                       High volume boost active - may cause distortion
+                    </p>
+                  </div>
+                )}
+              </div>
+              
+              {/* Auto-Sync Control */}
+              <div className="mt-6">
+                <div className="flex items-center justify-between mb-3">
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Auto-Sync
+                  </label>
+                  <div className="flex items-center space-x-2">
+                    <span className={`text-xs font-medium ${
+                      autoSyncEnabled 
+                        ? 'text-green-600 dark:text-green-400' 
+                        : 'text-gray-500 dark:text-gray-400'
+                    }`}>
+                      {autoSyncEnabled ? 'ON' : 'OFF'}
+                    </span>
+                    <button
+                      onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                        autoSyncEnabled 
+                          ? 'bg-blue-600' 
+                          : 'bg-gray-200 dark:bg-gray-700'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          autoSyncEnabled ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {autoSyncEnabled 
+                    ? 'Automatically syncs play, pause, and seek events with other users' 
+                    : 'Manual sync only - use the sync button to synchronize'
+                  }
+                </p>
+                {isReceivingSync && (
+                  <div className="mt-2 p-2 bg-green-50 dark:bg-green-900/30 rounded-lg border border-green-200 dark:border-green-700">
+                    <p className="text-xs text-green-600 dark:text-green-300 flex items-center">
+                      <span className="mr-1">🔄</span>
+                      Receiving sync data...
                     </p>
                   </div>
                 )}
