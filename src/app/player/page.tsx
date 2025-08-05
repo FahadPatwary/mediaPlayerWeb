@@ -49,12 +49,15 @@ export default function MediaPlayer() {
     ? 'https://seriousserver.onrender.com' 
     : 'http://localhost:3002';
 
-  // Initialize Socket.IO connection
+  // Initialize Socket.IO connection with optimized settings
   useEffect(() => {
     const mediaSyncSocket = io(serverUrl, {
       transports: ['websocket', 'polling'],
       timeout: 20000,
-      forceNew: true
+      forceNew: true,
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 10
     });
 
     mediaSyncSocketRef.current = mediaSyncSocket;
@@ -174,8 +177,32 @@ export default function MediaPlayer() {
 
     return () => {
       mediaSyncSocket.disconnect();
+      // Cleanup notification timeout
+      if (notificationTimeoutRef.current) {
+        clearTimeout(notificationTimeoutRef.current);
+      }
     };
   }, []);
+
+  // Cleanup effect for component unmount
+  useEffect(() => {
+    return () => {
+      // Cleanup file URL to prevent memory leaks
+      if (currentFile) {
+        URL.revokeObjectURL(currentFile);
+      }
+      
+      // Cleanup audio context
+      if (audioContext && audioContext.state !== 'closed') {
+        audioContext.close().catch(console.error);
+      }
+      
+      // Cleanup notification timeout
+      if (notificationTimeoutRef.current) {
+        clearTimeout(notificationTimeoutRef.current);
+      }
+    };
+  }, [currentFile, audioContext]);
 
   // Dark mode effect
   useEffect(() => {
@@ -186,11 +213,20 @@ export default function MediaPlayer() {
     }
   }, []);
 
-  // Utility functions
+  // Utility functions with cleanup
+  const notificationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastVolumeWarningRef = useRef<number>(0);
+  
   const showNotification = (message: string, type: 'success' | 'error') => {
+    // Clear existing timeout to prevent memory leaks
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current);
+    }
+    
     setNotification({ message, type, visible: true });
-    setTimeout(() => {
+    notificationTimeoutRef.current = setTimeout(() => {
       setNotification(prev => ({ ...prev, visible: false }));
+      notificationTimeoutRef.current = null;
     }, 3000);
   };
 
@@ -218,6 +254,11 @@ export default function MediaPlayer() {
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
+      // Cleanup previous file URL to prevent memory leaks
+      if (currentFile) {
+        URL.revokeObjectURL(currentFile);
+      }
+      
       setIsFileLoading(true);
       setIsVideoLoading(true);
       const url = URL.createObjectURL(file);
@@ -289,6 +330,8 @@ export default function MediaPlayer() {
   const initializeAudioEnhancement = () => {
     if (videoRef.current && !audioContext) {
       try {
+        // Note: Audio context cleanup handled by browser garbage collection
+        
         const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
         const ctx = new AudioContextClass();
         const source = ctx.createMediaElementSource(videoRef.current);
@@ -304,6 +347,7 @@ export default function MediaPlayer() {
         console.log('Audio enhancement initialized');
       } catch (error) {
         console.error('Failed to initialize audio enhancement:', error);
+        showNotification('Audio enhancement failed to initialize', 'error');
       }
     }
   };
@@ -376,12 +420,18 @@ export default function MediaPlayer() {
     setVolumeBoost(value);
     
     if (gainNode) {
-      gainNode.gain.value = value;
+      // Use setValueAtTime for smoother audio transitions
+      gainNode.gain.setValueAtTime(value, audioContext?.currentTime || 0);
       console.log('Volume boost set to:', value);
     }
     
+    // Throttle high volume warnings to prevent spam
     if (value > 2) {
-      showNotification('⚠️ High volume boost may cause distortion', 'error');
+      const now = Date.now();
+      if (now - lastVolumeWarningRef.current > 2000) {
+        showNotification('⚠️ High volume boost may cause distortion', 'error');
+        lastVolumeWarningRef.current = now;
+      }
     }
   };
 

@@ -22,26 +22,35 @@ export default function HomePage() {
     }
   }, []);
 
-  // Optimized mouse tracking with throttling
+  // Optimized mouse tracking with throttling and performance improvements
   useEffect(() => {
     let animationFrameId: number;
-    
+    let lastUpdateTime = 0;
+    const throttleDelay = 16; // ~60fps
+
     const handleMouseMove = (e: MouseEvent) => {
+      const now = performance.now();
+      
       if (animationFrameId) {
         cancelAnimationFrame(animationFrameId);
       }
       
-      animationFrameId = requestAnimationFrame(() => {
-        setMousePosition({ x: e.clientX, y: e.clientY });
-      });
+      // Throttle updates to improve performance
+      if (now - lastUpdateTime >= throttleDelay) {
+        animationFrameId = requestAnimationFrame(() => {
+          setMousePosition({ x: e.clientX, y: e.clientY });
+          lastUpdateTime = now;
+        });
+      }
     };
 
     const handleMouseEnter = () => setIsHovering(true);
     const handleMouseLeave = () => setIsHovering(false);
 
+    // Use passive listeners for better performance
     window.addEventListener('mousemove', handleMouseMove, { passive: true });
-    document.addEventListener('mouseenter', handleMouseEnter);
-    document.addEventListener('mouseleave', handleMouseLeave);
+    document.addEventListener('mouseenter', handleMouseEnter, { passive: true });
+    document.addEventListener('mouseleave', handleMouseLeave, { passive: true });
 
     return () => {
       if (animationFrameId) {
