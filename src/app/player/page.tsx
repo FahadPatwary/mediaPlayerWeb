@@ -101,7 +101,24 @@ export default function MediaPlayer() {
       console.log('Room joined:', data);
       setCurrentRoom(data.roomCode);
       setIsLoading(false);
+      setRoomCode(''); // Clear the input field
       showNotification(`Joined room: ${data.roomCode}`, 'success');
+    });
+
+    mediaSyncSocket.on('roomLeft', (data) => {
+      console.log('Room left:', data);
+      setCurrentRoom(null);
+      showNotification(`Left room: ${data.roomCode}`, 'success');
+    });
+
+    mediaSyncSocket.on('userJoined', (data) => {
+      console.log('User joined room:', data);
+      showNotification('A user joined the room', 'success');
+    });
+
+    mediaSyncSocket.on('userLeft', (data) => {
+      console.log('User left room:', data);
+      showNotification('A user left the room', 'error');
     });
 
     mediaSyncSocket.on('roomError', (error) => {
@@ -112,20 +129,42 @@ export default function MediaPlayer() {
 
     mediaSyncSocket.on('syncMedia', (data: { mediaState: MediaState }) => {
       console.log('Received sync data:', data);
-      if (videoRef.current && data.mediaState) {
-        const timeDiff = Math.abs(videoRef.current.currentTime - data.mediaState.currentTime);
-        if (timeDiff > 1) {
-          videoRef.current.currentTime = data.mediaState.currentTime;
-          console.log('Synced video time to:', data.mediaState.currentTime);
+      if (videoRef.current && data.mediaState && currentRoom) {
+        try {
+          // Validate received data
+          if (typeof data.mediaState.currentTime !== 'number' || typeof data.mediaState.isPlaying !== 'boolean') {
+            console.error('Invalid sync data received:', data.mediaState);
+            return;
+          }
+          
+          const video = videoRef.current;
+          const timeDiff = Math.abs(video.currentTime - data.mediaState.currentTime);
+          
+          // Only sync if time difference is significant (more than 1 second)
+          if (timeDiff > 1) {
+            video.currentTime = data.mediaState.currentTime;
+            console.log('Synced video time to:', data.mediaState.currentTime);
+          }
+          
+          // Handle play/pause state
+          if (data.mediaState.isPlaying && video.paused) {
+            video.play().catch((error) => {
+              console.error('Failed to play video:', error);
+              showNotification('Failed to play video', 'error');
+            });
+            console.log('Started playing video');
+          } else if (!data.mediaState.isPlaying && !video.paused) {
+            video.pause();
+            console.log('Paused video');
+          }
+          
+          showNotification('Media synced', 'success');
+        } catch (error) {
+          console.error('Error handling sync data:', error);
+          showNotification('Sync error occurred', 'error');
         }
-        if (data.mediaState.isPlaying && videoRef.current.paused) {
-          videoRef.current.play();
-          console.log('Started video playback');
-        } else if (!data.mediaState.isPlaying && !videoRef.current.paused) {
-          videoRef.current.pause();
-          console.log('Paused video playback');
-        }
-        showNotification('Received sync from another user', 'success');
+      } else if (!currentRoom) {
+        console.warn('Received sync data but not in a room');
       }
     });
 
@@ -326,8 +365,9 @@ export default function MediaPlayer() {
   const leaveRoom = () => {
     if (mediaSyncSocketRef.current && currentRoom) {
       mediaSyncSocketRef.current.emit('leaveRoom', { roomCode: currentRoom });
-      setCurrentRoom(null);
-      showNotification('Left room', 'success');
+      // Don't set currentRoom to null here - wait for server confirmation
+    } else {
+      showNotification('Not in a room', 'error');
     }
   };
 
