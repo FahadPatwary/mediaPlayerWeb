@@ -57,7 +57,7 @@ class PerformanceTracker {
       entryTypes.forEach(type => {
         try {
           this.observer?.observe({ entryTypes: [type] });
-        } catch (e) {
+        } catch {
           // Some browsers might not support all entry types
           console.debug(`Performance observer type '${type}' not supported`);
         }
@@ -160,7 +160,7 @@ const PerformanceMonitor: React.FC = () => {
           longTaskObserver.disconnect();
           if (memoryInterval) clearInterval(memoryInterval);
         };
-      } catch (error) {
+      } catch {
         console.debug('Long task observer not supported');
       }
     }

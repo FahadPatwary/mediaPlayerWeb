@@ -6,7 +6,7 @@ import { useState, useEffect } from 'react';
 export default function HomePage() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
-  const [isHovering, setIsHovering] = useState(false);
+  const [, setIsHovering] = useState(false);
 
   // Initialize theme on client side
   useEffect(() => {

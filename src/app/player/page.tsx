@@ -1,8 +1,10 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { io, Socket } from 'socket.io-client';
 import Link from 'next/link';
+import videojs from 'video.js';
+import 'video.js/dist/video-js.css';
 
 interface MediaState {
   currentTime: number;
@@ -23,7 +25,7 @@ export default function MediaPlayer() {
   const [isLoading, setIsLoading] = useState(false);
   const [isVideoLoading, setIsVideoLoading] = useState(false);
   const [isFileLoading, setIsFileLoading] = useState(false);
-  const [currentFile, setCurrentFile] = useState('');
+  const [currentFile, setCurrentFile] = useState<File | null>(null);
   const [currentFileName, setCurrentFileName] = useState('');
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [notification, setNotification] = useState<NotificationState>({
@@ -34,16 +36,19 @@ export default function MediaPlayer() {
   const [volumeBoost, setVolumeBoost] = useState(1);
   const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
   const [gainNode, setGainNode] = useState<GainNode | null>(null);
-  const [sourceNode, setSourceNode] = useState<MediaElementAudioSourceNode | null>(null);
+  const [, setSourceNode] = useState<MediaElementAudioSourceNode | null>(null);
   const [isSyncAnimating, setIsSyncAnimating] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [syncButtonPosition, setSyncButtonPosition] = useState({ x: 20, y: 100 });
   const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
-  const [lastSyncTime, setLastSyncTime] = useState(0);
+  const [, setLastSyncTime] = useState(0);
   const [isReceivingSync, setIsReceivingSync] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
 
   // Refs
   const videoRef = useRef<HTMLVideoElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const playerRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaSyncSocketRef = useRef<Socket | null>(null);
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -148,68 +153,89 @@ export default function MediaPlayer() {
 
     mediaSyncSocket.on('syncMedia', (data: { mediaState: MediaState, senderId?: string, syncType?: string }) => {
       console.log('Received sync data:', data);
-      if (videoRef.current && data.mediaState && currentRoom) {
+      
+      // Early validation - check if we have the necessary components
+      if (!data.mediaState) {
+        console.warn('Received sync data without mediaState');
+        return;
+      }
+      
+      if (!currentRoom) {
+        console.warn('Received sync data but not in a room - ignoring');
+        return;
+      }
+      
+      if (!playerRef.current) {
+        console.warn('Received sync data but no Video.js player available');
+        return;
+      }
+      
+      try {
+        // Validate received data structure
+        if (typeof data.mediaState.currentTime !== 'number' || typeof data.mediaState.isPlaying !== 'boolean') {
+          console.error('Invalid sync data received:', data.mediaState);
+          return;
+        }
+        
+        // Prevent sync loops by ignoring our own sync events
+        if (data.senderId === mediaSyncSocket.id) {
+          console.log('Ignoring own sync event');
+          return;
+        }
+        
+        // Set receiving sync flag to prevent auto-sync during this operation
+        setIsReceivingSync(true);
+        isReceivingSyncRef.current = true;
+        
+        const player = playerRef.current;
+        const { currentTime, isPlaying } = data.mediaState;
+        const syncType = data.syncType || 'UNKNOWN';
+        
         try {
-          // Validate received data
-          if (typeof data.mediaState.currentTime !== 'number' || typeof data.mediaState.isPlaying !== 'boolean') {
-            console.error('Invalid sync data received:', data.mediaState);
-            return;
-          }
-          
-          // Prevent sync loops by ignoring our own sync events
-          if (data.senderId === mediaSyncSocket.id) {
-            console.log('Ignoring own sync event');
-            return;
-          }
-          
-          // Set receiving sync flag to prevent auto-sync during this operation
-          setIsReceivingSync(true);
-          isReceivingSyncRef.current = true;
-          
-          const video = videoRef.current;
-          const { currentTime, isPlaying } = data.mediaState;
-          const syncType = data.syncType || 'UNKNOWN';
-          
           // More aggressive sync for manual syncs, less for auto syncs
           const threshold = syncType === 'MANUAL' ? 0.3 : syncType === 'ROOM_STATE' ? 1.0 : 0.5;
-          const timeDiff = Math.abs(video.currentTime - currentTime);
+          const timeDiff = Math.abs(player.currentTime() - currentTime);
           
           if (timeDiff > threshold) {
-            video.currentTime = currentTime;
+            player.currentTime(currentTime);
             console.log(`🔄 [${syncType}] Synced time: ${currentTime.toFixed(2)}s (diff: ${timeDiff.toFixed(2)}s)`);
           }
           
           // Handle play/pause state with better error handling
-          if (isPlaying && video.paused) {
-            video.play().then(() => {
-              console.log(`▶️ [${syncType}] Synced to play`);
-            }).catch((error) => {
-              console.error('Failed to play video:', error);
-              showNotification('Failed to play video - user interaction may be required', 'error');
-            });
-          } else if (!isPlaying && !video.paused) {
-            video.pause();
+          if (isPlaying && player.paused()) {
+            player.play().then(() => {
+               console.log(`▶️ [${syncType}] Synced to play`);
+             }).catch((error: unknown) => {
+               console.error('Failed to play video:', error);
+               showNotification('Failed to play video - user interaction may be required', 'error');
+             });
+          } else if (!isPlaying && !player.paused()) {
+            player.pause();
             console.log(`⏸️ [${syncType}] Synced to pause`);
           }
           
           // Update last sync time for UI feedback
           setLastSyncTime(Date.now());
           
-          // Clear receiving sync flag after a short delay
+          // Show success notification only for manual syncs to avoid spam
+          if (syncType === 'MANUAL' || syncType === 'ROOM_STATE') {
+            showNotification('Media synced', 'success');
+          }
+          
+        } catch (error) {
+          console.error('Error during sync operation:', error);
+        } finally {
+          // Always clear receiving sync flag
           setTimeout(() => {
             setIsReceivingSync(false);
             isReceivingSyncRef.current = false;
           }, 100);
-          
-          showNotification('Media synced', 'success');
-        } catch (error) {
-          console.error('Error handling sync data:', error);
-          showNotification('Sync error occurred', 'error');
-          setIsReceivingSync(false);
-          isReceivingSyncRef.current = false;
         }
-      } else if (!currentRoom) {
-        console.warn('Received sync data but not in a room');
+        
+      } catch (error) {
+        console.error('Error processing sync data:', error);
+        setIsReceivingSync(false);
+        isReceivingSyncRef.current = false;
       }
     });
 
@@ -224,15 +250,79 @@ export default function MediaPlayer() {
         clearTimeout(notificationTimeoutRef.current);
       }
     };
+  }, [currentRoom, serverUrl]);
+
+  // Track client-side mounting to prevent hydration issues
+  useEffect(() => {
+    setIsMounted(true);
   }, []);
 
-  // Auto-sync event listeners for video events
+  // Initialize Video.js player
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !currentRoom) return;
+    // Only run on client-side after component is mounted
+    if (!isMounted || typeof window === 'undefined') return;
+    
+    // Initialize Video.js when we have a file and video element
+    if (videoRef.current && currentFile && !playerRef.current) {
+      try {
+        console.log('Initializing Video.js player');
+        const fileUrl = URL.createObjectURL(currentFile);
+        
+        // Initialize Video.js
+        const player = videojs(videoRef.current, {
+          controls: true,
+          responsive: true,
+          fluid: true,
+          playbackRates: [0.5, 1, 1.25, 1.5, 2],
+        });
+        
+        playerRef.current = player;
+        
+        // Set up Video.js event listeners
+        player.ready(() => {
+          console.log('Video.js player is ready');
+          
+          // Set the source after player is ready
+          player.src({
+            src: fileUrl,
+            type: currentFile.type
+          });
+        });
+      } catch (error) {
+        console.error('Error initializing Video.js:', error);
+        showNotification('Error initializing video player', 'error');
+      }
+      
+      // Clean up on unmount or when file changes
+      return () => {
+        if (playerRef.current) {
+          console.log('Disposing Video.js player');
+          playerRef.current.dispose();
+          playerRef.current = null;
+        }
+      };
+    }
+  }, [currentFile, isMounted]);
+
+  // Cleanup Video.js player on unmount
+  useEffect(() => {
+    return () => {
+      if (playerRef.current) {
+        playerRef.current.dispose();
+        playerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Auto-sync event listeners for Video.js events
+  useEffect(() => {
+    if (!isMounted) return;
+    
+    const player = playerRef.current;
+    if (!player || !currentRoom) return;
 
     const handlePlay = () => {
-      console.log('Video play event detected');
+      console.log('Video.js play event detected');
       if (syncTimeoutRef.current) {
         clearTimeout(syncTimeoutRef.current);
       }
@@ -240,7 +330,7 @@ export default function MediaPlayer() {
     };
 
     const handlePause = () => {
-      console.log('Video pause event detected');
+      console.log('Video.js pause event detected');
       if (syncTimeoutRef.current) {
         clearTimeout(syncTimeoutRef.current);
       }
@@ -248,7 +338,7 @@ export default function MediaPlayer() {
     };
 
     const handleSeeked = () => {
-      console.log('Video seek event detected');
+      console.log('Video.js seek event detected');
       if (syncTimeoutRef.current) {
         clearTimeout(syncTimeoutRef.current);
       }
@@ -257,7 +347,7 @@ export default function MediaPlayer() {
 
     const handleTimeUpdate = () => {
       // Periodic sync every 10 seconds during playback
-      if (!video.paused && autoSyncEnabled) {
+      if (!player.paused() && autoSyncEnabled) {
         const now = Date.now();
         if (now - lastAutoSyncRef.current > 10000) {
           autoSyncMediaState();
@@ -266,33 +356,28 @@ export default function MediaPlayer() {
     };
 
     if (autoSyncEnabled) {
-      video.addEventListener('play', handlePlay);
-      video.addEventListener('pause', handlePause);
-      video.addEventListener('seeked', handleSeeked);
-      video.addEventListener('timeupdate', handleTimeUpdate);
+      player.on('play', handlePlay);
+      player.on('pause', handlePause);
+      player.on('seeked', handleSeeked);
+      player.on('timeupdate', handleTimeUpdate);
     }
 
     return () => {
-      if (video) {
-        video.removeEventListener('play', handlePlay);
-        video.removeEventListener('pause', handlePause);
-        video.removeEventListener('seeked', handleSeeked);
-        video.removeEventListener('timeupdate', handleTimeUpdate);
+      if (player) {
+        player.off('play', handlePlay);
+        player.off('pause', handlePause);
+        player.off('seeked', handleSeeked);
+        player.off('timeupdate', handleTimeUpdate);
       }
       if (syncTimeoutRef.current) {
         clearTimeout(syncTimeoutRef.current);
       }
     };
-  }, [currentRoom, autoSyncEnabled]);
+  }, [currentRoom, autoSyncEnabled, currentFile, isMounted]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Cleanup effect for component unmount
   useEffect(() => {
     return () => {
-      // Cleanup file URL to prevent memory leaks
-      if (currentFile) {
-        URL.revokeObjectURL(currentFile);
-      }
-      
       // Cleanup audio context
       if (audioContext && audioContext.state !== 'closed') {
         audioContext.close().catch(console.error);
@@ -308,7 +393,7 @@ export default function MediaPlayer() {
         clearTimeout(notificationTimeoutRef.current);
       }
     };
-  }, [currentFile, audioContext]);
+  }, [audioContext]);
 
   // Dark mode effect and codec detection
   useEffect(() => {
@@ -390,15 +475,9 @@ export default function MediaPlayer() {
         return;
       }
       
-      // Cleanup previous file URL to prevent memory leaks
-      if (currentFile) {
-        URL.revokeObjectURL(currentFile);
-      }
-      
       setIsFileLoading(true);
       setIsVideoLoading(true);
-      const url = URL.createObjectURL(file);
-      setCurrentFile(url);
+      setCurrentFile(file);
       setCurrentFileName(file.name);
       
       console.log('Loading file:', {
@@ -408,84 +487,16 @@ export default function MediaPlayer() {
         extension: fileExtension
       });
       
-      if (videoRef.current) {
-        const video = videoRef.current;
-        let hasLoaded = false;
-        
-        // Clear any existing event listeners
-        video.onloadeddata = null;
-        video.onerror = null;
-        video.oncanplay = null;
-        
-        // Set up event handlers
-        const handleLoadSuccess = () => {
-          if (hasLoaded) return; // Prevent multiple calls
-          hasLoaded = true;
-          setIsFileLoading(false);
-          setIsVideoLoading(false);
-          initializeAudioEnhancement();
-          showNotification(`Loaded: ${file.name}`, 'success');
-          clearTimeout(timeoutId);
-          console.log('Video loaded successfully');
-        };
-        
-        const handleLoadError = (error?: Event) => {
-          if (hasLoaded) return; // Prevent multiple calls
-          hasLoaded = true;
-          setIsFileLoading(false);
-          setIsVideoLoading(false);
-          
-          // Enhanced error messaging for macOS/Safari
-          const userAgent = navigator.userAgent;
-          const isMac = userAgent.includes('Mac');
-          const isSafari = userAgent.includes('Safari') && !userAgent.includes('Chrome');
-          
-          let errorMessage = 'Error loading file';
-          if (isMac && isSafari) {
-            errorMessage = 'Safari compatibility issue. Try converting to MP4 with H.264 codec or use Chrome/Firefox.';
-          } else if (isMac) {
-            errorMessage = 'macOS compatibility issue. Ensure file uses supported codecs (H.264/AAC for MP4).';
-          }
-          
-          showNotification(errorMessage, 'error');
-          clearTimeout(timeoutId);
-          console.error('Video loading error:', {
-            error,
-            userAgent,
-            fileType: file.type,
-            fileName: file.name,
-            platform: { isMac, isSafari }
-          });
-        };
-        
-        // Set timeout fallback
-        const timeoutId = setTimeout(() => {
-          if (!hasLoaded) {
-            console.log('Video loading timeout, forcing completion');
-            hasLoaded = true;
-            setIsFileLoading(false);
-            setIsVideoLoading(false);
-            showNotification('File loaded (timeout)', 'success');
-            initializeAudioEnhancement();
-          }
-        }, 3000); // 3 second timeout
-        
-        // Add event listeners
-        video.addEventListener('loadeddata', handleLoadSuccess, { once: true });
-        video.addEventListener('canplaythrough', handleLoadSuccess, { once: true });
-        video.addEventListener('error', handleLoadError, { once: true });
-        
-        // Set the source and load
-        video.src = url;
-        video.load();
-        
-        console.log('Started loading video:', file.name);
-      } else {
-        // If no video ref, just clear the loading states
+      // Video.js will handle the file loading, so we just need to clear loading states
+      // The actual loading will happen in the Video.js useEffect
+      setTimeout(() => {
         setIsFileLoading(false);
         setIsVideoLoading(false);
-        showNotification('Video element not ready', 'error');
-      }
+        showNotification(`Loaded: ${file.name}`, 'success');
+        initializeAudioEnhancement();
+      }, 100);
+      
+      console.log('File selected for Video.js:', file.name);
     }
   };
 
@@ -515,7 +526,7 @@ export default function MediaPlayer() {
   };
 
   const autoSyncMediaState = () => {
-    if (!autoSyncEnabled || !mediaSyncSocketRef.current || !videoRef.current || !currentRoom || isReceivingSyncRef.current) {
+    if (!autoSyncEnabled || !mediaSyncSocketRef.current || !playerRef.current || !currentRoom || isReceivingSyncRef.current) {
       return;
     }
     
@@ -527,9 +538,10 @@ export default function MediaPlayer() {
     
     lastAutoSyncRef.current = now;
     
+    const player = playerRef.current;
     const mediaState: MediaState = {
-      currentTime: videoRef.current.currentTime,
-      isPlaying: !videoRef.current.paused
+      currentTime: player.currentTime(),
+      isPlaying: !player.paused()
     };
     
     console.log('Auto-syncing media state:', { roomId: currentRoom, mediaState });
@@ -543,14 +555,15 @@ export default function MediaPlayer() {
   };
 
   const syncMediaState = () => {
-    if (!mediaSyncSocketRef.current || !videoRef.current || !currentRoom) {
+    if (!mediaSyncSocketRef.current || !playerRef.current || !currentRoom) {
       showNotification('Cannot sync: No room joined or video loaded', 'error');
       return;
     }
     setIsSyncAnimating(true);
+    const player = playerRef.current;
     const mediaState: MediaState = {
-      currentTime: videoRef.current.currentTime,
-      isPlaying: !videoRef.current.paused
+      currentTime: player.currentTime(),
+      isPlaying: !player.paused()
     };
     console.log('Manual syncing media state:', { roomId: currentRoom, mediaState });
     mediaSyncSocketRef.current.emit('syncMedia', { 
@@ -757,22 +770,25 @@ export default function MediaPlayer() {
                   </div>
                 )}
                 
-                <video
-                  ref={videoRef}
-                  className="w-full h-full object-contain"
-                  controls
-                  preload="metadata"
-                  playsInline
-                  webkit-playsinline="true"
-                  crossOrigin="anonymous"
-                  style={{ display: currentFile ? 'block' : 'none' }}
-                >
-                  <p className="text-white text-center p-4">
-                    Your browser does not support the video tag or the file format.
-                    <br />
-                    Please try a different browser or convert your file to MP4/WebM format.
-                  </p>
-                </video>
+                {isMounted && (
+                  <div data-vjs-player style={{ display: currentFile ? 'block' : 'none' }}>
+                    <video
+                      ref={videoRef}
+                      className="video-js vjs-default-skin w-full h-full object-contain"
+                      data-setup="{}"
+                      preload="metadata"
+                      playsInline
+                      webkit-playsinline="true"
+                      crossOrigin="anonymous"
+                    >
+                      <p className="text-white text-center p-4">
+                        Your browser does not support the video tag or the file format.
+                        <br />
+                        Please try a different browser or convert your file to MP4/WebM format.
+                      </p>
+                    </video>
+                  </div>
+                )}
                 {!currentFile && (
                   <div className="flex items-center justify-center h-full text-gray-400">
                     <div className="text-center">
