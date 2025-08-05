@@ -146,8 +146,13 @@ export default function MediaPlayer() {
     setPlatform(platformInfo);
     console.log('🖥️ Platform Info:', { platform: platformInfo, userAgent });
 
-    // Initialize Socket.IO connection
-    const mediaSyncSocket = io('https://seriousserver.onrender.com', {
+    // Initialize Socket.IO connection - Using localhost for development
+    // For production, deploy seriousserver to Vercel/Railway/Render and update this URL
+    const serverUrl = process.env.NODE_ENV === 'production' 
+      ? 'https://your-deployed-server.vercel.app' // Update this with your actual deployment URL
+      : 'http://localhost:3001'; // Local development server
+    
+    const mediaSyncSocket = io(serverUrl, {
       transports: ['websocket', 'polling'],
       timeout: 20000,
       reconnection: true,
@@ -191,8 +196,8 @@ export default function MediaPlayer() {
       showNotification('❌ Reconnection failed', 'error');
     });
 
-    // Listen for sync updates
-    mediaSyncSocket.on('syncMedia', ({ mediaState }: { mediaState: MediaState }) => {
+    // Handle media state updates from server
+    const handleMediaStateUpdate = ({ mediaState }: { mediaState: MediaState }) => {
       if (!mediaState || isManuallySyncingRef.current) {
         console.log('📥 Sync ignored:', { hasMediaState: !!mediaState, isManuallySyncing: isManuallySyncingRef.current });
         return;
@@ -237,7 +242,11 @@ export default function MediaPlayer() {
       setTimeout(() => {
         isRemoteUpdateRef.current = false;
       }, 500);
-    });
+    };
+
+    // Listen for both new and legacy sync events
+    mediaSyncSocket.on('media-state-update', handleMediaStateUpdate);
+    mediaSyncSocket.on('syncMedia', handleMediaStateUpdate); // Legacy support
 
     return () => {
       mediaSyncSocket.disconnect();
@@ -340,6 +349,9 @@ export default function MediaPlayer() {
     
     const socket = mediaSyncSocketRef.current;
     if (socket) {
+      // Use new event name for better compatibility
+      socket.emit('media-state-change', { roomId: currentRoom, mediaState });
+      // Also emit legacy event for backward compatibility
       socket.emit('syncMedia', { roomId: currentRoom, mediaState });
     }
   };
@@ -505,20 +517,20 @@ export default function MediaPlayer() {
     }`}>
       {/* Loading Animation */}
       {isAppLoading && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-br from-blue-50 to-purple-50 dark:from-gray-900 dark:to-gray-800">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-br from-blue-50 to-blue-100 dark:from-gray-900 dark:to-gray-800">
           <div className="text-center animate-fade-in-scale">
             <div className="relative mb-6">
-              <div className="w-24 h-24 border-4 border-blue-200 dark:border-blue-400 border-t-blue-600 dark:border-t-blue-400 rounded-full animate-spin mx-auto animate-pulse-glow"></div>
-              <div className="absolute inset-0 w-24 h-24 border-4 border-transparent border-r-purple-600 dark:border-r-purple-400 rounded-full animate-spin mx-auto" style={{animationDirection: 'reverse', animationDuration: '1.5s'}}></div>
+              <div className="w-24 h-24 border-4 border-blue-200 dark:border-blue-400 border-t-blue-600 dark:border-t-blue-500 rounded-full animate-spin mx-auto animate-pulse-glow"></div>
+              <div className="absolute inset-0 w-24 h-24 border-4 border-transparent border-r-blue-500 dark:border-r-blue-400 rounded-full animate-spin mx-auto" style={{animationDirection: 'reverse', animationDuration: '1.5s'}}></div>
               <div className="absolute inset-0 flex items-center justify-center">
                 <span className="text-2xl animate-pulse">🎵</span>
               </div>
             </div>
-            <h2 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-400 dark:to-purple-400 bg-clip-text text-transparent mb-3">Media Player</h2>
+            <h2 className="text-3xl font-bold text-blue-600 dark:text-blue-400 mb-3">Media Player</h2>
             <p className="text-gray-600 dark:text-gray-300 animate-pulse text-lg">Loading your experience...</p>
             <div className="mt-4 flex justify-center space-x-1">
               <div className="w-2 h-2 bg-blue-500 dark:bg-blue-400 rounded-full animate-bounce" style={{animationDelay: '0ms'}}></div>
-              <div className="w-2 h-2 bg-purple-500 dark:bg-purple-400 rounded-full animate-bounce" style={{animationDelay: '150ms'}}></div>
+              <div className="w-2 h-2 bg-blue-600 dark:bg-blue-500 rounded-full animate-bounce" style={{animationDelay: '150ms'}}></div>
               <div className="w-2 h-2 bg-blue-500 dark:bg-blue-400 rounded-full animate-bounce" style={{animationDelay: '300ms'}}></div>
             </div>
           </div>
@@ -530,10 +542,10 @@ export default function MediaPlayer() {
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black bg-opacity-60 backdrop-blur-sm animate-fade-in-scale p-3 sm:p-4">
           <div className="bg-white dark:bg-gray-800 rounded-2xl sm:rounded-3xl p-6 sm:p-8 max-w-sm sm:max-w-lg mx-4 shadow-2xl animate-slide-in-bottom border border-gray-200 dark:border-gray-600">
             <div className="text-center">
-              <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-r from-blue-500 to-purple-600 dark:from-blue-400 dark:to-purple-500 rounded-full flex items-center justify-center mx-auto mb-4 sm:mb-6 animate-pulse-glow">
-                <span className="text-2xl sm:text-3xl animate-bounce">🎵</span>
+              <div className="w-16 h-16 sm:w-20 sm:h-20 bg-blue-600 dark:bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-4 sm:mb-6 animate-pulse-glow">
+                <span className="text-2xl sm:text-3xl animate-bounce text-white">🎵</span>
               </div>
-              <h2 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-400 dark:to-purple-400 bg-clip-text text-transparent mb-3 sm:mb-4">Welcome to Media Player!</h2>
+              <h2 className="text-2xl sm:text-3xl font-bold text-blue-600 dark:text-blue-400 mb-3 sm:mb-4">Welcome to Media Player!</h2>
               <p className="text-gray-600 dark:text-gray-300 mb-4 sm:mb-6 leading-relaxed text-base sm:text-lg">
                 A synchronized video watching experience with advanced audio enhancement. 
                 Create rooms, invite friends, and enjoy media together with volume boosting up to 500%!
@@ -544,13 +556,13 @@ export default function MediaPlayer() {
                   <div className="text-xl sm:text-2xl mb-1 sm:mb-2">🔊</div>
                   <div className="text-xs sm:text-sm font-medium text-blue-700 dark:text-blue-300">Audio Boost</div>
                 </div>
-                <div className="text-center p-3 sm:p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg sm:rounded-xl">
+                <div className="text-center p-3 sm:p-4 bg-blue-100 dark:bg-blue-800/20 rounded-lg sm:rounded-xl">
                   <div className="text-xl sm:text-2xl mb-1 sm:mb-2">👥</div>
-                  <div className="text-xs sm:text-sm font-medium text-purple-700 dark:text-purple-300">Sync Rooms</div>
+                  <div className="text-xs sm:text-sm font-medium text-blue-600 dark:text-blue-400">Sync Rooms</div>
                 </div>
-                <div className="text-center p-3 sm:p-4 bg-green-50 dark:bg-green-900/20 rounded-lg sm:rounded-xl">
+                <div className="text-center p-3 sm:p-4 bg-blue-200 dark:bg-blue-700/20 rounded-lg sm:rounded-xl">
                   <div className="text-xl sm:text-2xl mb-1 sm:mb-2">🎬</div>
-                  <div className="text-xs sm:text-sm font-medium text-green-700 dark:text-green-300">Media Player</div>
+                  <div className="text-xs sm:text-sm font-medium text-blue-800 dark:text-blue-200">Media Player</div>
                 </div>
               </div>
               
