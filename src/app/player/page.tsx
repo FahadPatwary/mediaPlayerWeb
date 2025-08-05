@@ -204,18 +204,38 @@ export default function MediaPlayer() {
     };
   }, [currentFile, audioContext]);
 
-  // Dark mode effect
+  // Dark mode effect and codec detection
   useEffect(() => {
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
       setIsDarkMode(true);
       document.documentElement.classList.add('dark');
     }
+    
+    // Check codec support on component mount
+    checkCodecSupport();
   }, []);
 
   // Utility functions with cleanup
   const notificationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastVolumeWarningRef = useRef<number>(0);
+  
+  // Codec detection utility
+  const checkCodecSupport = () => {
+    const video = document.createElement('video');
+    const codecs = {
+      'MP4 (H.264)': video.canPlayType('video/mp4; codecs="avc1.42E01E"'),
+      'MP4 (H.265/HEVC)': video.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"'),
+      'WebM (VP8)': video.canPlayType('video/webm; codecs="vp8"'),
+      'WebM (VP9)': video.canPlayType('video/webm; codecs="vp9"'),
+      'WebM (AV1)': video.canPlayType('video/webm; codecs="av01.0.05M.08"'),
+      'OGG (Theora)': video.canPlayType('video/ogg; codecs="theora"'),
+      'QuickTime': video.canPlayType('video/quicktime')
+    };
+    
+    console.log('Codec Support:', codecs);
+    return codecs;
+  };
   
   const showNotification = (message: string, type: 'success' | 'error') => {
     // Clear existing timeout to prevent memory leaks
@@ -254,6 +274,16 @@ export default function MediaPlayer() {
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
+      // Check file format compatibility
+      const supportedFormats = ['video/mp4', 'video/webm', 'video/ogg', 'video/quicktime', 'video/x-msvideo'];
+      const fileExtension = file.name.toLowerCase().split('.').pop();
+      const supportedExtensions = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'];
+      
+      if (!supportedFormats.includes(file.type) && !supportedExtensions.includes(fileExtension || '')) {
+        showNotification(`Unsupported file format: ${file.type || fileExtension}. Please use MP4, WebM, or MOV files.`, 'error');
+        return;
+      }
+      
       // Cleanup previous file URL to prevent memory leaks
       if (currentFile) {
         URL.revokeObjectURL(currentFile);
@@ -264,6 +294,13 @@ export default function MediaPlayer() {
       const url = URL.createObjectURL(file);
       setCurrentFile(url);
       setCurrentFileName(file.name);
+      
+      console.log('Loading file:', {
+        name: file.name,
+        type: file.type,
+        size: `${(file.size / 1024 / 1024).toFixed(2)} MB`,
+        extension: fileExtension
+      });
       
       if (videoRef.current) {
         const video = videoRef.current;
@@ -291,9 +328,28 @@ export default function MediaPlayer() {
           hasLoaded = true;
           setIsFileLoading(false);
           setIsVideoLoading(false);
-          showNotification('Error loading file', 'error');
+          
+          // Enhanced error messaging for macOS/Safari
+          const userAgent = navigator.userAgent;
+          const isMac = userAgent.includes('Mac');
+          const isSafari = userAgent.includes('Safari') && !userAgent.includes('Chrome');
+          
+          let errorMessage = 'Error loading file';
+          if (isMac && isSafari) {
+            errorMessage = 'Safari compatibility issue. Try converting to MP4 with H.264 codec or use Chrome/Firefox.';
+          } else if (isMac) {
+            errorMessage = 'macOS compatibility issue. Ensure file uses supported codecs (H.264/AAC for MP4).';
+          }
+          
+          showNotification(errorMessage, 'error');
           clearTimeout(timeoutId);
-          console.error('Video loading error:', error);
+          console.error('Video loading error:', {
+            error,
+            userAgent,
+            fileType: file.type,
+            fileName: file.name,
+            platform: { isMac, isSafari }
+          });
         };
         
         // Set timeout fallback
@@ -495,7 +551,7 @@ export default function MediaPlayer() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="video/*,audio/*,.mkv,.avi,.mov,.wmv,.flv,.webm,.m4v,.3gp,.ogv,.ts,.mts,.m2ts,.divx,.xvid,.rm,.rmvb,.asf,.vob,.dv,.f4v,.mp3,.wav,.flac,.aac,.ogg,.wma,.m4a,.opus,.aiff,.au,.ra,.amr,.3ga,.ac3,.dts,.ape,.tak,.tta,.wv,.mka,.mpc,.spx,.gsm,.voc,.snd,.caf"
+        accept=".mp4,.mov,.webm,.ogg,.avi,.mkv,video/mp4,video/quicktime,video/webm,video/ogg,video/x-msvideo,video/*"
         onChange={handleFileSelect}
         className="hidden"
       />
@@ -566,8 +622,17 @@ export default function MediaPlayer() {
                   className="w-full h-full object-contain"
                   controls
                   preload="metadata"
+                  playsInline
+                  webkit-playsinline="true"
+                  crossOrigin="anonymous"
                   style={{ display: currentFile ? 'block' : 'none' }}
-                />
+                >
+                  <p className="text-white text-center p-4">
+                    Your browser does not support the video tag or the file format.
+                    <br />
+                    Please try a different browser or convert your file to MP4/WebM format.
+                  </p>
+                </video>
                 {!currentFile && (
                   <div className="flex items-center justify-center h-full text-gray-400">
                     <div className="text-center">
@@ -673,6 +738,24 @@ export default function MediaPlayer() {
                     </p>
                   </div>
                 )}
+              </div>
+              
+              {/* Troubleshooting Section */}
+              <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-700">
+                <div className="flex items-start space-x-2">
+                  <svg className="w-5 h-5 text-blue-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <div>
+                    <h4 className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-2">macOS Playback Issues?</h4>
+                    <ul className="text-xs text-blue-700 dark:text-blue-300 space-y-1">
+                      <li>• Use MP4 files with H.264 codec for best compatibility</li>
+                      <li>• Try Chrome or Firefox if Safari doesn&apos;t work</li>
+                      <li>• Convert videos using HandBrake or similar tools</li>
+                      <li>• Check browser console for detailed error info</li>
+                    </ul>
+                  </div>
+                </div>
               </div>
             </div>
 
