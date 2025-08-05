@@ -44,8 +44,10 @@ export default function MediaPlayer() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaSyncSocketRef = useRef<Socket | null>(null);
 
-  // Server URL
-  const serverUrl = 'http://localhost:3002';
+  // Server URL - Use deployed server for production
+  const serverUrl = process.env.NODE_ENV === 'production' 
+    ? 'https://seriousserver.onrender.com' 
+    : 'http://localhost:3002';
 
   // Initialize Socket.IO connection
   useEffect(() => {
